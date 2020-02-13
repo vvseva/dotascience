@@ -1,0 +1,744 @@
+---
+title: "ICCSS_dota"
+author: "Suschevskiy Vsevolod"
+date: "04 02 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(igraph)
+library(ggraph)
+library(dplyr)
+library(ggforce)
+library(gganimate)
+library(statnet)
+library(intergraph)
+library(network)
+library(ergm)
+```
+
+
+reading csv with the following structure 
+```{r}
+#                  New_Team value        Country colour_country
+# 1             CDEC Gaming     7          China        #a6d854
+# 2            CDEC Avenger     1          China        #a6d854
+# 3              CDEC Youth     3          China        #a6d854
+```
+
+
+```{r}
+player_transfers_SUPREME <- read_csv("dota22/player_transfers_SUPREME.csv")
+country <- read.csv("~/dotasience/countries_normal.csv", sep=";")
+```
+
+the same for the meta data
+
+```{r}
+#                  New_Team value        Country colour_country
+# 1             CDEC Gaming     7          China        #a6d854
+# 2            CDEC Avenger     1          China        #a6d854
+# 3              CDEC Youth     3          China        #a6d854
+```
+
+filtering NA, and inner join
+
+```{r}
+#transfers_SUPREME_small <- player_transfers_SUPREME %>% dplyr::filter(dota_pl_team %in% country$New_Team)
+
+#transfers_SUPREME_small
+
+teams_supreme <- read_delim("~/dotasience/dota22/teams_supreme.csv", ";", escape_double = FALSE, trim_ws = TRUE)
+teams_supreme <- teams_supreme %>% filter( !is.na(team_name) )
+transfers_SUPREME_small <- player_transfers_SUPREME %>% dplyr::filter(dota_pl_team %in% teams_supreme$team_name)
+
+#table(teams_supreme$country)
+
+```
+
+
+select dates
+
+```{r}
+library(stringr)
+transfers_SUPREME_small$dota_pl_data <- str_replace_all(transfers_SUPREME_small$dota_pl_data, "Present", "2018-12-30")
+transfers_SUPREME_small$dota_pl_data <- str_replace_all(transfers_SUPREME_small$dota_pl_data, "[?][?]", "01")
+transfers_SUPREME_small <- transfers_SUPREME_small %>% dplyr::filter(!str_detect(dota_pl_data, "[0][1][0][1]") )
+transfers_SUPREME_small$dota_pl_data <- str_replace_all(transfers_SUPREME_small$dota_pl_data, "[?]", "1")
+
+transfers_SUPREME_small <-  tidyr::separate(transfers_SUPREME_small, col = dota_pl_data, into = c("come", "left"), sep=" — ")
+
+
+```
+
+#transfers
+
+for each player I read data as __date of entering the team and date of leaving this team, and team name__ and write it as privious team, current team, date of the event and palyer`s name
+
+```{r}
+transfers_SUPREME_small <- transfers_SUPREME_small %>%  group_by(players.Player_name.i.) %>%  mutate(Old_Team = dplyr::lag(dota_pl_team, order_by = players.Player_name.i.), New_team = dota_pl_team, when = dplyr::lag(left, order_by = players.Player_name.i.), player = players.Player_name.i.) %>% na.omit() %>% select(New_team, Old_Team, when, player) %>% filter(Old_Team != New_team) %>% ungroup() %>% select(-players.Player_name.i.)
+
+transfers_SUPREME_small <- transfers_SUPREME_small %>% arrange(when)
+library(lubridate)
+transfers_SUPREME_small$when = ymd(transfers_SUPREME_small$when)
+#transfers_SUPREME_small <- transfers_SUPREME_small %>% dplyr::filter(!is.na(when)) %>% filter(when > "2014-08-12" )
+
+transfers_SUPREME_small <- transfers_SUPREME_small %>% dplyr::filter(!is.na(when)) %>% filter(when > "2017-08-12" & when < "2018-06-12" )
+```
+
+
+```{r}
+head(transfers_SUPREME_small)
+
+#   New_team        Old_Team             when       player              
+#   <chr>           <chr>                <date>     <chr>               
+# 1 Mad Kings       Luccini              2018-01-01 Greedy              
+# 2 MidOrFeed       Team Secret          2017-08-14 KheZu 
+```
+
+
+## Network
+
+Create a network where node is a team, and link is a player
+
+```{r}
+library(igraph)
+g = graph_from_data_frame(transfers_SUPREME_small)
+
+
+degree <- igraph::degree(g, mode= "all")
+degree <- data.frame(keyName=names(degree), value=degree, row.names=NULL)
+degree <- plyr::rename (degree,c("keyName" = "New_team"))
+team_colour <- left_join(degree, teams_supreme, by = c ("New_team" = "team_name"))
+
+V(g)$country=(team_colour$country)
+
+ = 50
+before = '#009FFF'
+after = '#ec2F4B'
+palette2 = colorRampPalette(c(before, after))
+#2560
+date_colour = palette2(fine)[as.numeric(cut(as.integer(c(1:255)),breaks = fine))]
+
+library(ggraph)
+ar = arrow(angle = 30, length = unit(2, "mm"), ends = "last", type = "open")
+
+V(g)$size = (log(igraph::betweenness(g)+0.1)+1)
+
+g
+
+g_layout = layout.fruchterman.reingold(g)
+mylay <- layout.auto(g)
+g_layout = as.data.frame(g_layout)
+names(g_layout) = c("x", "y")
+
+manual_layout <- create_layout(graph = g,
+              layout = "manual", node.positions = g_layout)
+```
+
+
+
+```{r}
+library("visNetwork") 
+
+team_colour$colour <- ifelse(team_colour$country == "China", "#ffffb3", 
+                       ifelse(team_colour$country == "North America", "#fb8072",
+                       ifelse(team_colour$country == "South America", "#8dd3c7", 
+                       ifelse(team_colour$country == "Erope", "#80b1d3", 
+                       ifelse(team_colour$country == "CIS", "#bebada", "#fdb462" )))))
+
+
+V(g)$color=team_colour$colour
+
+The_International_14 <-  The_International_all[c(99:116),]
+The_International_17 <-  The_International_all[c(99:116),]
+
+####ALARM
+
+team_colour$TI = ifelse(team_colour$New_team %in% The_International_17$name, "TI", "no")
+team_colour$TI <- as.factor(team_colour$TI)
+
+team_colour$TI <- factor(team_colour$TI, levels = c("no", "TI"))
+V(g)$TI = team_colour$TI
+
+
+library(readr)
+earnings <- read_csv("~/dotasience/dota22/earnings.csv", 
+    col_types = cols(X1 = col_skip()))
+
+team_colour <- left_join(team_colour, earnings, by = c("New_team" = "team_name"))
+team_colour$money[is.na(team_colour$money)] = 0
+V(g)$earnings = team_colour$money
+
+
+team_colour$rank <- ifelse(team_colour$money > 1000000, "1", 
+                            ifelse(team_colour$money > 0, "2", "3")) 
+V(g)$rank = team_colour$rank
+V(g)$ORG = team_colour$Org
+V(g)$ISORG = ifelse(is.na(team_colour$Org),"noORG", "someORG")
+
+save(g, "graph.RData")
+
+E(g)$stage <- (1:length(date_colour))
+#  num <- E(g)$date_colour)
+
+nodesize <- as.numeric(igraph::degree(g) * 1.25)
+
+V(g)$GL <- ifelse(V(g)$name %in% teams_gl$Player, 1, 0)
+
+summary(as.factor(V(g)$GL))
+```
+
+
+```{r}
+graph = ggraph(g, layout = "fr") +
+  theme_graph() +
+  geom_edge_density(aes(fill = date_colour), show.legend = FALSE) + 
+  geom_edge_link0(alpha = 0.3,  arrow = ar,  show.legend = FALSE) +
+  geom_node_point(aes(color = as.factor(country) ), size = nodesize, shape = 1, stroke = 5, show.legend = FALSE) +
+  geom_node_point(aes(alpha = as.numeric(TI)-1), color = "red", size = 2, show.legend = FALSE)
+ #geom_node_text(aes(label = name), size = 2, color = 'black', repel = TRUE)
+ # ggtitle("Transfers network")
+
+graph
+
+length(nodesize)
+
+
+?geom_node_point
+p <- graph + transition_states(stage, transition_length = 1, state_length = 1) +
+  shadow_wake(0.5, wrap = FALSE)+
+  NULL
+
+p
+
+animate(p, start_pause = 10, end_pause = 10, height = 900, width = 1200, fps = 20, nframes = 500)
+```
+
+
+```{r}
+g2 <- toVisNetworkData(g)
+
+# задем цвет узлов
+g2$nodes$color = team_colour$colour
+
+# задаем размер узлов
+g2$nodes$size = scales::rescale(g2$nodes$size^2, to = c(1, 50))
+
+# подписи при наведении
+g2$nodes$title = g2$nodes$label
+
+visNetwork(nodes = g2$nodes, edges = g2$edges, height = "800px", width = "800px") %>%
+  visIgraphLayout()
+```
+
+
+## ERGM
+
+remove loops to fit graph into ERGM
+
+```{r}
+
+
+g2 <- igraph::simplify(g, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+net <- asNetwork(g2,  amap = attrmap(newdf = NULL), loops = FALSE)
+net
+plot (net)
+
+
+V(g)$earningsC <-  (ifelse(V(g)$earnings == 0, "poor",
+                           ifelse(V(g)$earnings < 500000, "mid", "rich"))
+                    )
+
+
+summary(V(g)$country)
+summary(V(g)$earningsC)
+summary(as.factor(V(g)$TI))
+summary(as.factor(V(g)$ISORG))
+```
+
+
+on 4 cores with increased size of a sample and decreased step for each estimation I run the model
+
+gwesp is geometrically weighted shared partner. Each new link between A and Cn, and Cn to B, adds smaller increase in the probability to the hance of link (transfer) between A and B
+
+```{r}
+control = control.ergm( parallel=4, parallel.type="PSOCK", init = NULL, MCMLE.maxit = 70, MCMC.init.maxedges = 30000, steplength = 0.25, seed = 128)
+                        #, MCMC.burnin=50000, MCMC.interval=5000, MCMC.samplesize=50000)
+
+ergm.model_4 <-  ergm(net ~ edges + mutual + match("TI", diff=T) + nodematch('country', diff=T) + gwesp(0.5, fixed = TRUE) + nodematch("ISORG", diff=T),
+            control = control)
+
+ergm.model.name = ergm.model_4
+
+?ergm.eta
+?nodematch
+?control.ergm
+mcmc.diagnostics(ergm.model.name)
+summary(ergm.model.name)
+m1.gof <-  gof(ergm.model.name)
+plot(m1.gof)
+```
+
+
+New structure of outgoing stars
+
+```{r}
+ergm.model_14 <-  ergm(net ~ edges + mutual + nodemix("TI", base = 1) + nodematch('country', diff=T)  + gwesp(0.5, fixed=TRUE) +ostar(2) +nodematch("ORG") , control=control.ergm(parallel=4, parallel.type="PSOCK")) 
+
+mcmc.diagnostics(ergm.model_14)
+m2.gof <-  gof(ergm.model_14)
+par(mfrow=c(3,2))
+plot(m2.gof)
+summary(ergm.model_14)
+ergm.model_14
+```
+
+
+compare simulated and real networks
+
+```{r}
+plot(simulate(ergm.model_4
+              ),
+          vertex.col=c("yellow","blue","black", "green", "red", "white", "pink")[(get.vertex.attribute(net, "country"))])
+
+plot((net),
+          vertex.col=c("yellow","blue","black", "green", "red", "white", "pink")[(get.vertex.attribute(net, "country"))])
+
+summary(ergm.model_2)
+
+plogis(sum(coef(ergm.model_2)[c(1,6)])) 
+plogis(sum(-9.035, 0.751, 2.273))
+plogis(sum(-9.035, 2.273))
+
+
+
+plogis(sum(-9.035, 0.751
+           ))
+plogis(sum(-9.035, 0.426, 0.751
+           ))
+plogis(sum(-9.035, 0.426, 0.426, 0.751
+           ))
+
+
+library(stargazer)
+
+stargazer(ergm.model_4, type = 'text', style = "asr")
+?stargazer
+
+stargazer(ergm.model_4, ergm.model_china14,title="Results", align=TRUE, no.space=TRUE, single.row=TRUE,  ci=TRUE, ci.level=0.90)
+```
+
+
+same model, but only for china
+
+```{r}
+china = g
+
+
+china <- igraph::delete.vertices(china, V(china)$country != "China")
+
+
+
+graph = ggraph(china, layout = "fr") +
+  theme_graph() +
+  geom_edge_fan(alpha = 0.1,  arrow = ar,  show.legend = FALSE) +
+  geom_node_point(aes(color = as.factor(country), size = size), shape = 1, show.legend = TRUE) +
+  geom_node_point(aes(alpha = as.numeric(TI)-1), color = "red", size = 2, show.legend = FALSE)
+ # geom_node_text(aes(label = name), size = 1, color = 'black', repel = TRUE) +
+ # ggtitle("Transfers network")
+
+graph
+
+china <- igraph::simplify(china, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+china <- asNetwork(china,  amap = attrmap(newdf = NULL), loops = FALSE)
+china
+plot (china)
+
+library(snowfall)
+library(Rmpi)
+
+ergm.model_china14 <-  ergm(china ~ edges + mutual + nodemix("TI", base = 1)  + nodemix("ISORG", base=1) + gwesp(0.5, fixed=TRUE), control=control.ergm(parallel=4, parallel.type="PSOCK"))    
+         
+mcmc
+mcmc.diagnostics(ergm.model_china14)       
+summary(ergm.model_china14)
+mchina.gof <-  gof(ergm.model_china14)
+plot(mchina.gof)
+
+plot(simulate(ergm.model_china14))
+plot(china)
+```
+
+
+
+```{r}
+europe = g
+europe <- igraph::delete.vertices(europe, V(europe)$country != "Europe")
+
+
+
+graph = ggraph(europe, layout = "fr") +
+  theme_graph() +
+  geom_edge_fan(alpha = 0.1,  arrow = ar,  show.legend = FALSE) +
+  geom_node_point(aes(color = as.factor(country), size = size), shape = 1, show.legend = TRUE) +
+  geom_node_point(aes(alpha = as.numeric(TI)-1), color = "red", size = 2, show.legend = FALSE)
+ # geom_node_text(aes(label = name), size = 1, color = 'black', repel = TRUE) +
+ # ggtitle("Transfers network")
+
+graph
+
+europe <- igraph::simplify(europe, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+europe <- asNetwork(europe,  amap = attrmap(newdf = NULL), loops = FALSE)
+europe
+plot (europe)
+
+ergm.model_europe2 <- ergm(europe ~ edges + mutual + nodemix("TI", base = 1)  + nodemix("ISORG", base=1) + gwesp(0.5, fixed=TRUE), control=control.ergm(parallel=4, parallel.type="PSOCK")) 
+
+summary(ergm.model_europe2)
+meurope.gof <-  gof(ergm.model_europe2)
+plot(meurope.gof)
+
+plot(europe)
+plot(simulate(ergm.model_europe2))
+```
+
+
+```{r}
+CIS = g
+
+
+CIS <- igraph::delete.vertices(CIS, V(CIS)$country != "CIS")
+
+
+library(ggraph)
+graph = ggraph(CIS, layout = "fr") +
+  theme_graph() +
+  geom_edge_fan(alpha = 0.1,  arrow = ar,  show.legend = FALSE) +
+  geom_node_point(aes(color = as.factor(country), size = size), shape = 1, show.legend = TRUE) +
+  geom_node_point(aes(alpha = as.numeric(TI)-1), color = "red", size = 2, show.legend = FALSE)
+ # geom_node_text(aes(label = name), size = 1, color = 'black', repel = TRUE) +
+ # ggtitle("Transfers network")
+
+graph
+
+CIS <- igraph::simplify(CIS, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+CIS <- asNetwork(CIS,  amap = attrmap(newdf = NULL), loops = FALSE)
+CIS
+plot (CIS)
+
+system.time(ergm.model_CIS2 <- ergm(CIS ~ edges + mutual + nodemix("TI", base = 1)  + nodemix("ISORG", base=1) + gwesp(0.5, fixed=TRUE), control=control.ergm(parallel=4, parallel.type="PSOCK")) 
+)
+
+summary(ergm.model_CIS2)
+mCIS.gof <-  gof(ergm.model_CIS2)
+plot(mCIS.gof)
+
+plot(CIS)
+plot(simulate(ergm.model_CIS2))
+
+
+The_International_14 %>% group_by(name) %>% summarise(n=n())
+```
+
+
+```{r}
+Asia = g
+
+
+Asia <- igraph::delete.vertices(Asia, V(Asia)$country != "Southeast Asia")
+
+
+library(ggraph)
+graph = ggraph(Asia, layout = "fr") +
+  theme_graph() +
+  geom_edge_fan(alpha = 0.1,  arrow = ar,  show.legend = FALSE) +
+  geom_node_point(aes(color = as.factor(country), size = size), shape = 1, show.legend = TRUE) +
+  geom_node_point(aes(alpha = as.numeric(TI)-1), color = "red", size = 2, show.legend = FALSE)
+ # geom_node_text(aes(label = name), size = 1, color = 'black', repel = TRUE) +
+ # ggtitle("Transfers network")
+
+graph
+
+Asia <- igraph::simplify(Asia, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+Asia <- asNetwork(Asia,  amap = attrmap(newdf = NULL), loops = FALSE)
+Asia
+plot (Asia)
+
+ergm.model_Asia2 <- ergm(Asia ~ edges + mutual + nodemix("TI", base = 1)  + nodemix("ISORG", base=1) + gwesp(0.5, fixed=TRUE), control=control.ergm(parallel=4, parallel.type="PSOCK")) 
+
+summary(ergm.model_Asia2)
+mAsia.gof <-  gof(ergm.model_Asia2)
+plot(mAsia.gof)
+
+plot(Asia)
+plot(simulate(ergm.model_Asia2))
+```
+
+```{r}
+b1 = team_colour %>% filter(!is.na(Org)) %>% group_by(country) %>% summarise(number = n())
+b2 = team_colour %>% filter(is.na(Org)) %>% group_by(country) %>% summarise(number = n())
+
+library(dplyr)
+team_colour %>% filter(!is.na(TI)) %>% group_by(country) %>% filter(TI == "TI") %>% summarise(number = n()) 
+
+b1
+b2
+
+b1$number / (b1$number + b2$number)
+
+remove(b1, b2)
+```
+
+
+
+```{r}
+df = transfers_SUPREME_small %>% filter(New_team %in% (team_colour %>% filter(country == "Europe" & TI == "TI") %>% select(New_team) %>% pull()) | Old_Team %in% (team_colour %>% filter(country == "Europe" & TI == "TI") %>% select(New_team) %>% pull())) 
+
+df <- unname(df)
+df[,2]
+
+df1 = data.frame(e =  rbind(df[,1], df[,2],make.row.names=FALSE), ne = rbind(df[,2], df[,1],make.row.names=FALSE) )
+?rbind
+
+
+df1 = df %>%  filter(df$New_team %in% (team_colour %>% filter(country == "Europe" & TI == "TI") %>% select(New_team) %>% pull()) )
+df2 = df %>%  filter(df$Old_Team %in% (team_colour %>% filter(country == "Europe" & TI == "TI") %>% select(New_team) %>% pull()) )
+df2 = df2[,c(2,1, 3,4)]
+
+colnames(df1)
+colnames(df2) <- colnames(df1)
+
+df = rbind(df1,df2)
+
+df = left_join(df, team_colour, by = c("Old_Team"= "New_team"))
+
+df_ngr$word3 = ifelse(df_ngr$word1 %in% team_mentions$to_detect, df_ngr$word1, df_ngr$word2)
+df_ngr$word4 = ifelse(df_ngr$word1 == df_ngr$word3, df_ngr$word2, df_ngr$word1)
+
+
+as.vector()
+```
+
+
+
+```{r}
+bn_transfers <- transfers_SUPREME_small
+
+bn_transfers <- dplyr::left_join(bn_transfers, country_colour, by = c("New_team" = "label"))
+bn_transfers <- bn_transfers[,-6]
+
+bn_transfers <- dplyr::left_join(bn_transfers, country_colour, by = c("Old_Team" = "label"))
+bn_transfers <- bn_transfers[,-7]
+
+
+bn_transfers <- bn_transfers %>% 
+  dplyr::rename(
+    New_country = country.x,
+    Old_country = country.y
+    )
+
+bn_transfers$TI_Old <- ifelse(bn_transfers$Old_Team %in% The_International_14$name, "TI", "no")
+bn_transfers$TI_New <- ifelse(bn_transfers$New_team %in% The_International_14$name, "TI", "no")
+
+bn_transfers$Org_Old <- ifelse(bn_transfers$Old_Team %in% team_colour$New_team, team_colour$Org, "no")
+bn_transfers$Org_New <- ifelse(bn_transfers$New_team %in% team_colour$New_team, team_colour$Org, "no")
+
+bn_transfers$Money_Old <- ifelse(bn_transfers$Old_Team %in% team_colour$New_team, team_colour$money, "no")
+bn_transfers$Money_New <- ifelse(bn_transfers$New_team %in% team_colour$New_team, team_colour$money, "no")
+
+write.csv(bn_transfers, file = "bn_transfers.csv")
+```
+
+
+## Glicko
+
+### END OF THE SCRIPT
+### END OF THE SCRIPT
+### END OF THE SCRIPT
+### END OF THE SCRIPT
+
+```{r}
+one <- as.data.frame(transfers_SUPREME_small$New_team)
+colnames(one) <- "team"
+two <- as.data.frame(transfers_SUPREME_small$Old_Team)
+colnames(two) <- "team"
+teams_2017 <- unique(rbind(one, two))
+teams_2017$team <- as.character(teams_2017$team)
+remove(one, two)
+```
+
+```{r}
+transfers_SUPREME_smaller <- transfers_SUPREME_small %>% filter(New_team %in% teams_gl_2017$lp & Old_Team %in% teams_gl_2017$lp)
+transfers_SUPREME_smaller$stage = ifelse(transfers_SUPREME_smaller$when <= "2017-10-01", 1, ifelse(transfers_SUPREME_smaller$when <= "2018-01-30", 2, 3))
+
+
+library(igraph)
+g = graph_from_data_frame(transfers_SUPREME_smaller)
+
+
+degree <- igraph::degree(g, mode= "all")
+degree <- data.frame(keyName=names(degree), value=degree, row.names=NULL)
+degree <- plyr::rename (degree,c("keyName" = "New_team"))
+team_colour <- left_join(degree, teams_supreme, by = c ("New_team" = "team_name"))
+
+team_colour <- left_join(team_colour, teams_gl_2017, by = c ("New_team" = "lp"))
+
+V(g)$country=(team_colour$country)
+
+fine = 50
+before = '#009FFF'
+after = '#ec2F4B'
+palette2 = colorRampPalette(c(before, after))
+#2560
+date_colour = palette2(fine)[as.numeric(cut(as.integer(c(1:216)),breaks = fine))]
+
+library(ggraph)
+ar = arrow(angle = 30, length = unit(2, "mm"), ends = "last", type = "open")
+
+V(g)$size = (log(betweenness(g)+0.1)+1)
+
+g_layout = layout.fruchterman.reingold(g)
+mylay <- layout.auto(g)
+g_layout = as.data.frame(g_layout)
+names(g_layout) = c("x", "y")
+
+manual_layout <- create_layout(graph = g,
+              layout = "manual", node.positions = g_layout)
+
+
+
+The_International_17 <-  The_International_all[c(99:116),]
+
+####ALARM
+
+team_colour$TI = ifelse(team_colour$New_team %in% The_International_17$name, "TI", "no")
+team_colour$TI <- as.factor(team_colour$TI)
+
+team_colour$TI <- factor(team_colour$TI, levels = c("no", "TI"))
+V(g)$TI = team_colour$TI
+
+
+library(readr)
+earnings <- read_csv("~/dotasience/dota22/earnings.csv", 
+    col_types = cols(X1 = col_skip()))
+
+team_colour <- left_join(team_colour, earnings, by = c("New_team" = "team_name"))
+team_colour$money[is.na(team_colour$money)] = 0
+V(g)$earnings = team_colour$money
+
+
+team_colour$rank <- ifelse(team_colour$money > 1000000, "1", 
+                            ifelse(team_colour$money > 0, "2", "3")) 
+V(g)$rank = team_colour$rank
+V(g)$ORG = team_colour$Org
+V(g)$ISORG = ifelse(is.na(team_colour$Org),"noORG", "someORG")
+
+save(g, "graph.RData")
+
+E(g)$stage <- (1:length(date_colour))
+  num <- E(g)$date_colour
+
+V(g)$size <- degree(g)
+
+V(g)$GL <- team_colour$Rating
+V(g)$GL2 <- team_colour$Rating2
+V(g)$GL1 <- team_colour$Rating1
+
+
+V(g)$name
+
+E(g)$wave = transfers_SUPREME_smaller$stage
+```
+
+## ERGM small
+
+```{r}
+library(statnet)
+library(intergraph)
+library(network)
+library(ergm)
+library(igraph)
+
+g2 <- igraph::simplify(g, remove.multiple = TRUE, remove.loops = TRUE,
+  edge.attr.comb = igraph_opt("edge.attr.comb"))
+
+net <- asNetwork(g2,  amap = attrmap(newdf = NULL), loops = FALSE)
+net
+plot (net)
+
+V(g)$GL4 <-  (cut(V(g)$GL, breaks = 3))
+
+V(g)$GLL <- log(V(g)$GL3)
+
+V(g)$earningsC <-  (ifelse(V(g)$earnings == 0, "poor",
+                           ifelse(V(g)$earnings < 500000, "mid", "rich"))
+                    )
+
+
+summary(V(g)$country)
+summary(V(g)$earningsC)
+summary(as.factor(V(g)$TI))
+summary(as.factor(V(g)$ISORG))
+```
+
+```{r}
+control = control.ergm( parallel=4, parallel.type="PSOCK", init = NULL, MCMLE.maxit = 70, MCMC.init.maxedges = 30000, steplength = 0.15, seed = 130)
+                        #, MCMC.burnin=50000, MCMC.interval=5000, MCMC.samplesize=50000)
+
+ergm.model_small <-  ergm(net ~ edges + mutual + nodematch("TI", diff=T) + nodematch('country', diff=T) + gwesp(0.5, fixed = TRUE) + nodematch("ISORG", diff=T) + absdiff("GLL") + nodematch("earningsC", diff = T),
+            control = control)
+#options(scipen=999)
+ergm.model.name = ergm.model_small
+
+# ?nodematch
+# ?control.ergm
+mcmc.diagnostics(ergm.model.name)
+summary(ergm.model.name)
+m1.gof <-  gof(ergm.model.name)
+plot(m1.gof)
+summary(ergm.model.name)
+```
+
+#Not a network
+```{r}
+
+
+ergm.model_4 <-  ergm(net ~ edges + match("TI", diff=T) + nodematch('country', diff=T) + nodematch("ISORG", diff=T)  + nodemix("GL4"),
+            control = control)
+
+ergm.model.name = ergm.model_4
+
+net
+mcmc.diagnostics(ergm.model.name)
+summary(ergm.model.name)
+m1.gof <-  gof(ergm.model.name)
+plot(m1.gof)
+```
+
+
+
+#HZ cho vectory
+
+```{r}
+transfers_SUPREME_smaller
+
+
+```
