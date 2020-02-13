@@ -15,4 +15,7 @@ Color is region, node size is degree
 ![Network](https://github.com/vvseva/dotascience-/blob/master/ic2s2transf.jpg)
 
 China vs the world
+
+In the China participation in The International (Top tournament) does not play role anymore, but there is another mobility path
+(within the management organization) 
 ![table](https://github.com/vvseva/dotascience/blob/master/ERGM_table.jpg?raw=true)
